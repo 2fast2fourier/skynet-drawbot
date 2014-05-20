@@ -1,5 +1,7 @@
 var SerialPort = require("serialport").SerialPort;
 
+var MAX_SPEED = 1200;
+
 //Commands
 var COMMAND_KEY = 33;
 var COMMAND_TRANSFER_START = 35;
@@ -70,12 +72,13 @@ Plugin.prototype.onMessage = function(message){
       serialPort.write(lineData, function(err, results) {
         console.log('serial write', results, err);
         serialPort.drain(function(){
+          console.log('closing port', serialPort);
           serialPort.close();
         });
       });
     });
   }else{
-    console.log("ERROR: no com port specified.");
+    console.log("ERROR: no com port specified or missing payload data.");
   }
 
 };
@@ -93,6 +96,7 @@ function generateLineData(lineJSON){
   var buffer = new Buffer(1024);
   console.log('transfer start');
   len = writeCommand(buffer, len, COMMAND_TRANSFER_START);
+  len = writeData2S(buffer, len, CMD_DRIVE_SPS, MAX_SPEED, MAX_SPEED);
   for(ix = 0; ix < lineArray.length; ix++){
     line = lineArray[ix];
     if(line.x.length > 0 && line.x.length == line.y.length){
