@@ -69,13 +69,18 @@ Plugin.prototype.onMessage = function(message){
       serialPort.on('data', function(data) {
         console.log('data received',data);
       });
-      serialPort.write(lineData, function(err, results) {
-        console.log('serial write', results, err);
-        serialPort.drain(function(){
-          console.log('closing port', serialPort);
-          serialPort.close();
+      //Delay write because the ACM0 device resets on connect on raspi
+      setTimeout(function(){
+        serialPort.write(lineData, function(err, results) {
+          console.log('serial write', results, err);
+          serialPort.drain(function(){
+            setTimeout(function(){
+              console.log('closing port', serialPort);
+              serialPort.close();
+            }, 1000);
+          });
         });
-      });
+      }, 5000);
     });
   }else{
     console.log("ERROR: no com port specified or missing payload data.");
@@ -136,7 +141,17 @@ function generateLineData(lineJSON){
 function writeDrive(buffer, len, cx, cy, dx, dy, draw){
   var sx = (cx-dx)+(cy-dy);
   var sy = (cx-dx)-(cy-dy);
-  console.log('move by',sx,sy);
+  var td = Math.abs(sx) + Math.abs(sy);
+  var spx, spy;
+  if(Math.abs(sx) < 1 || Math.abs(sy) < 1){
+    spx = MAX_SPEED;
+    spy = MAX_SPEED;
+  }else{
+    spx = Math.abs(sx)/td*MAX_SPEED;
+    spy = Math.abs(sy)/td*MAX_SPEED;
+  }
+  len = writeData2S(buffer, len, CMD_DRIVE_SPS, spx, spy);
+  console.log('move by',sx,sy,'at',spx, spy,'sps');
   return writeData2S(buffer, len, CMD_DRIVE, sx, sy);
 }
 
