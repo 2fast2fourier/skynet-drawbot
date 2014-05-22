@@ -1,6 +1,6 @@
 var SerialPort = require("serialport").SerialPort;
 
-var MAX_SPEED = 1200;
+var MAX_SPEED = 800;
 
 //Commands
 var COMMAND_KEY = 33;
@@ -58,29 +58,41 @@ var messageSchema = {
 
 Plugin.prototype.onMessage = function(message){
   var data = message.message || message.payload;
-  console.log(this.options.comPort, message.fromUuid, data);
+  var linePos = 0;
+  var writing = true;
+  console.log(this.options.comPort, message.fromUuid);
   if(this.options.comPort && data.lineData){
     var serialPort = new SerialPort(this.options.comPort, {
-      baudrate: 9600
+      baudRate: 9600
     });
     var lineData = generateLineData(data.lineData);
     serialPort.on("open", function(err){
       console.log("serial open", serialPort, err);
-      serialPort.on('data', function(data) {
-        console.log('data received',data);
-      });
-      //Delay write because the ACM0 device resets on connect on raspi
       setTimeout(function(){
-        serialPort.write(lineData, function(err, results) {
-          console.log('serial write', results, err);
-          serialPort.drain(function(){
-            setTimeout(function(){
-              console.log('closing port', serialPort);
-              serialPort.close();
-            }, 1000);
-          });
-        });
+        writing = false;
       }, 5000);
+      serialPort.on('data', function(data) {
+        console.log('data received',data, writing, linePos, lineData.length);
+        if(!writing && data[0] == 0x23){
+          if(linePos < lineData.length){
+            writing = true;
+            console.log('starting write', linePos);
+            serialPort.write(lineData[linePos], function(err, results) {
+              console.log('serial write', linePos, results);
+              serialPort.drain(function(){
+                setTimeout(function(){
+                  console.log('serial drain', linePos);
+                  linePos++;
+                  writing = false;
+                }, 100);
+              });
+            });
+          }else{
+            console.log('closing port', serialPort);
+            serialPort.close();
+          }
+        }
+      });
     });
   }else{
     console.log("ERROR: no com port specified or missing payload data.");
@@ -94,19 +106,20 @@ Plugin.prototype.destroy = function(){
 };
 
 function generateLineData(lineJSON){
+  var BUFFER_MAX = 1024;
   var lineArray = JSON.parse(lineJSON);
   var line;
   var cx = 0, cy = 0, dx, dy;
   var ix, iy, len = 0;
-  var buffer = new Buffer(1024);
+  var lines = [];
+  var buffer = new Buffer(BUFFER_MAX);
   console.log('transfer start');
   len = writeCommand(buffer, len, COMMAND_TRANSFER_START);
-  len = writeData2S(buffer, len, CMD_DRIVE_SPS, MAX_SPEED, MAX_SPEED);
   for(ix = 0; ix < lineArray.length; ix++){
     line = lineArray[ix];
-    if(line.x.length > 0 && line.x.length == line.y.length){
+    if(line && line.x.length > 0 && line.x.length == line.y.length){
       dx = line.x[0];
-      dy = line.y[0];
+      dy = -line.y[0];
       console.log('move to point @', dx, dy);
       len = writeDrive(buffer, len, cx, cy, dx, dy);
       cx = dx;
@@ -115,10 +128,21 @@ function generateLineData(lineJSON){
       len = writeData(buffer, len, CMD_ARM_EXTEND);
       for(iy = 0; iy < line.x.length; iy++){
         dx = line.x[iy];
-        dy = line.y[iy];
+        dy = -line.y[iy];
         len = writeDrive(buffer, len, cx, cy, dx, dy);
         cx = dx;
         cy = dy;
+        if(len > BUFFER_MAX - 64){
+          console.log('transfer end');
+          len = writeData(buffer, len, COMMAND_TRANSFER_END);
+          console.log('execute');
+          len = writeCommand(buffer, len, COMMAND_EXECUTE);
+          lines.push(buffer.slice(0, len));
+          buffer = new Buffer(1024);
+          len = 0;
+          console.log('transfer start');
+          len = writeCommand(buffer, len, COMMAND_TRANSFER_START);
+        }
       }
       console.log('arm up @', cx, cy);
       len = writeData(buffer, len, CMD_ARM_RETRACT);
@@ -134,8 +158,9 @@ function generateLineData(lineJSON){
   len = writeData(buffer, len, COMMAND_TRANSFER_END);
   console.log('execute');
   len = writeCommand(buffer, len, COMMAND_EXECUTE);
-  console.log("data", buffer);
-  return buffer.slice(0, len);
+  lines.push(buffer.slice(0, len));
+  console.log("data", lines);
+  return lines;
 }
 
 function writeDrive(buffer, len, cx, cy, dx, dy, draw){
@@ -147,11 +172,11 @@ function writeDrive(buffer, len, cx, cy, dx, dy, draw){
     spx = MAX_SPEED;
     spy = MAX_SPEED;
   }else{
-    spx = Math.abs(sx)/td*MAX_SPEED;
-    spy = Math.abs(sy)/td*MAX_SPEED;
+    spx = Math.round(Math.abs(sx)/td*MAX_SPEED);
+    spy = Math.round(Math.abs(sy)/td*MAX_SPEED);
   }
-  len = writeData2S(buffer, len, CMD_DRIVE_SPS, spx, spy);
   console.log('move by',sx,sy,'at',spx, spy,'sps');
+  len = writeData2S(buffer, len, CMD_DRIVE_SPS, spx, spy);
   return writeData2S(buffer, len, CMD_DRIVE, sx, sy);
 }
 
